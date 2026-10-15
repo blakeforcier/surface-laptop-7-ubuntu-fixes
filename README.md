@@ -31,6 +31,19 @@ Collection of kernel drivers, systemd services, sleep preservation hooks, and de
 ### 4. 80% Smart Charging Hardware Limit
 - **Note on Battery Behavior:** The Surface Laptop 7 features hardware-enforced **Smart Charging / Battery Limit** inside the Surface Embedded Controller (SAM EC) firmware. When plugged in, the device charges rapidly (~38 W) up to exactly **80%**, at which point the EC switches to `Not charging` to protect battery health and prevent swelling. This is managed by hardware firmware and is completely normal.
 
+### 5. Windows Hello Face Unlock (Howdy) Calibration for Intel IPU7
+- **Problem:** Cold-waking the Intel IPU7 software ISP camera can cause Howdy's default 10s timeout to trigger before matching, and downscaling to 320px causes facial landmark loss with hats, glasses, or low-contrast shadows.
+- **Solution:**
+  - Increase timeout to 15s in `/etc/howdy/config.ini`.
+  - Bump face detection resolution from `max_height = 320` to `480` for reliable landmark extraction.
+  - Set certainty to `5.8` to accommodate headwear without compromising security.
+
+### 6. Surface Camera (`surface-camera`) Native Libadwaita App
+- **Problem:** Ubuntu 24.04's default GNOME Camera (Snapshot) requires GPU zero-copy DMA buffers (`SPA_DATA_DmaBuf`) over PipeWire, which crashes with `Operation not supported` when fed by virtual loopback webcams (`/dev/video42`).
+- **Solution:**
+  - Native GTK4 / Libadwaita camera application using hardware-accelerated `gtk4paintablesink` directly on `/dev/video42`.
+  - Zero popups, zero latency (`sync=false`), clean modern UI, and 1-click 1080p photo capture to `~/Pictures/Camera/`.
+
 ---
 
 ## Directory Structure
@@ -39,6 +52,11 @@ Collection of kernel drivers, systemd services, sleep preservation hooks, and de
 surface-laptop-7-ubuntu-fixes/
 ├── README.md
 ├── install.sh
+├── camera/
+│   ├── surface-camera
+│   └── surface-camera.desktop
+├── howdy/
+│   └── README.md
 ├── kernel-module/
 │   ├── surface_sl7_gpe_guard.c
 │   └── Makefile

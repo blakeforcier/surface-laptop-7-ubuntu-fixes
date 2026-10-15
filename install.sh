@@ -45,4 +45,11 @@ chmod 755 /lib/systemd/system-sleep/auto-poweroff-timer.sh
 echo "--> Applying Ubuntu Dock full-screen autohide patch..."
 bash "$REPO_DIR/gnome-shell/apply-dock-patch.sh"
 
+# 6. Install Surface Camera application
+echo "--> Installing Surface Camera application..."
+cp -f "$REPO_DIR/camera/surface-camera" /usr/local/bin/
+chmod 755 /usr/local/bin/surface-camera
+cp -f "$REPO_DIR/camera/surface-camera.desktop" /usr/share/applications/
+update-desktop-database /usr/share/applications/ || true
+
 echo "=== Installation complete! ==="

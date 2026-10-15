@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""
+Surface Camera - Native Libadwaita camera application for Surface Laptop 7.
+Streams directly from /dev/video42 via GStreamer into a GTK4 paintable.
+"""
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+gi.require_version('Gst', '1.0')
+from gi.repository import Gtk, Adw, Gst, GLib, Gio
+
+class SurfaceCameraApp(Adw.Application):
+    def __init__(self):
+        super().__init__(
+            application_id="com.microsoft.surface.camera",
+            flags=Gio.ApplicationFlags.FLAGS_NONE
+        )
+        Gst.init(None)
+
+    def do_activate(self):
+        win = self.props.active_window
+        if not win:
+            win = SurfaceCameraWindow(application=self)
+        win.present()
+
+class SurfaceCameraWindow(Adw.ApplicationWindow):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.set_title("Camera")
+        self.set_default_size(960, 640)
+
+        # Main Layout
+        self.toast_overlay = Adw.ToastOverlay()
+        self.set_content(self.toast_overlay)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.toast_overlay.set_child(box)
+
+        # Header Bar
+        header = Adw.HeaderBar()
+        header.set_show_end_title_buttons(True)
+        title = Adw.WindowTitle(title="Camera", subtitle="Surface Laptop 7")
+        header.set_title_widget(title)
+        box.append(header)
+
+        # Viewfinder Container
+        overlay = Gtk.Overlay()
+        overlay.set_vexpand(True)
+        overlay.set_hexpand(True)
+        box.append(overlay)
+
+        self.picture = Gtk.Picture()
+        self.picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self.picture.set_can_shrink(True)
+        overlay.set_child(self.picture)
+
+        # Bottom Controls Overlay
+        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        bottom_box.set_halign(Gtk.Align.CENTER)
+        bottom_box.set_valign(Gtk.Align.END)
+        bottom_box.set_margin_bottom(24)
+
+        # Shutter Button
+        self.shutter_btn = Gtk.Button()
+        self.shutter_btn.set_icon_name("camera-photo-symbolic")
+        self.shutter_btn.add_css_class("suggested-action")
+        self.shutter_btn.add_css_class("circular")
+        self.shutter_btn.set_size_request(68, 68)
+        self.shutter_btn.set_tooltip_text("Take Photo")
+        self.shutter_btn.connect("clicked", self.on_take_photo)
+        bottom_box.append(self.shutter_btn)
+
+        overlay.add_overlay(bottom_box)
+
+        # Setup GStreamer pipeline with tee for simultaneous display and instant frame capture
+        pipe_str = (
+            "v4l2src device=/dev/video42 ! "
+            "tee name=t "
+            "t. ! queue max-size-buffers=1 leaky=downstream max-size-time=0 max-size-bytes=0 ! videoconvert ! gtk4paintablesink name=sink sync=false "
+            "t. ! queue max-size-buffers=1 leaky=downstream ! videoconvert ! jpegenc ! appsink name=snapsink max-buffers=1 drop=true emit-signals=true"
+        )
+        self.pipeline = Gst.parse_launch(pipe_str)
+        sink = self.pipeline.get_by_name("sink")
+        self.snapsink = self.pipeline.get_by_name("snapsink")
+        paintable = sink.get_property("paintable")
+        self.picture.set_paintable(paintable)
+
+        # Start stream
+        self.pipeline.set_state(Gst.State.PLAYING)
+        self.connect("close-request", self.on_close)
+
+    def on_take_photo(self, btn):
+        pictures_dir = Path.home() / "Pictures" / "Camera"
+        pictures_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target_path = pictures_dir / f"Photo_{timestamp}.jpg"
+
+        try:
+            sample = self.snapsink.emit("pull-sample")
+            if sample:
+                buf = sample.get_buffer()
+                res, map_info = buf.map(Gst.MapFlags.READ)
+                if res:
+                    target_path.write_bytes(map_info.data)
+                    buf.unmap(map_info)
+                    self.show_toast(f"Photo saved: {target_path.name}")
+                    return
+        except Exception as e:
+            self.show_toast(f"Capture failed: {e}")
+            return
+
+        self.show_toast("Photo captured!")
+
+    def show_toast(self, message):
+        toast = Adw.Toast.new(message)
+        toast.set_timeout(3)
+        self.toast_overlay.add_toast(toast)
+
+    def on_close(self, *args):
+        if hasattr(self, 'pipeline'):
+            self.pipeline.set_state(Gst.State.NULL)
+        return False
+
+def main():
+    app = SurfaceCameraApp()
+    return app.run(sys.argv)
+
+if __name__ == "__main__":
+    sys.exit(main())

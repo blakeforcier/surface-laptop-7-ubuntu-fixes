@@ -64,8 +64,8 @@ surface-laptop-7-ubuntu-fixes/
 Clone this repository and run the installer:
 
 ```bash
-git clone https://github.com/<your-username>/surface-laptop-7-linux-support.git
-cd surface-laptop-7-linux-support
+git clone https://github.com/blakeforcier/surface-laptop-7-ubuntu-fixes.git
+cd surface-laptop-7-ubuntu-fixes
 sudo ./install.sh
 ```
 

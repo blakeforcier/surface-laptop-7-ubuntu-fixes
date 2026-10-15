@@ -1,0 +1,52 @@
+#!/usr/bin/python3
+"""Verify the known recovery image and quiet firmware before normal reboot."""
+from pathlib import Path
+import hashlib, os, subprocess, sys, time
+
+def refuse(message):
+    raise SystemExit('Restart refused: '+message)
+
+if os.geteuid() != 0:
+    refuse('run with sudo')
+if sys.argv[1:] not in ([], ['--check-only']):
+    raise SystemExit('Usage: surface-normal-reboot [--check-only]')
+if Path('/sys/class/dmi/id/product_name').read_text().strip() != 'Surface Laptop for Business 7th Edition with Intel':
+    refuse('this helper is specific to the diagnosed laptop')
+image = Path('/boot/initrd.img-6.19.8-surface-3')
+expected = '9088886ec203b2ea856287ff331434bd1a1d8cb4ed3fa126198440981d41b965'
+if hashlib.sha256(image.read_bytes()).hexdigest() != expected:
+    refuse('normal recovery image changed; verify it again before restarting')
+target = ('gnulinux-advanced-6bc7db8e-c448-4f64-89a0-b0147699eeee>'
+          'gnulinux-6.19.8-surface-3-advanced-6bc7db8e-c448-4f64-89a0-b0147699eeee')
+config = Path('/etc/default/grub.d/99-surface.cfg').read_text()
+if 'GRUB_DEFAULT="'+target+'"' not in config:
+    refuse('normal GRUB default changed')
+environment = subprocess.check_output(['grub-editenv', '/boot/grub/grubenv', 'list'], text=True)
+for row in environment.splitlines():
+    if row.startswith('next_entry=') and row != 'next_entry=':
+        refuse('a one-time boot is queued; review it before restarting')
+guard = Path('/sys/module/surface_sl7_gpe_guard/parameters/sci_paused')
+for sample in range(3):
+    if guard.exists() and guard.read_text().strip() != '0':
+        refuse('the experimental guard still holds the SCI interrupt')
+    rows = subprocess.check_output(['ps', '-eo', 'pid,stat,comm,wchan:40'], text=True).splitlines()
+    blocked = []
+    for row in rows[1:]:
+        fields = row.split(maxsplit=3)
+        if len(fields) < 4 or not fields[1].startswith('D'):
+            continue
+        name, wait = fields[2:]
+        # ps can truncate a kernel worker's queue name, hiding its ACPI role.
+        # Conservatively refuse blocked kernel workers even without that suffix.
+        if name.startswith('kworker/') or any(term in name+' '+wait for term in ['acpi', 'kac', 'pciehp', 'pci_']):
+            blocked.append(row.strip())
+    if blocked:
+        refuse('firmware/PCIe work has not drained:\n'+'\n'.join(blocked))
+    if sample < 2:
+        time.sleep(1)
+print('Normal recovery image verified; no blocked firmware workers in three checks.')
+if sys.argv[1:] == ['--check-only']:
+    print('Check only: no restart requested.')
+else:
+    subprocess.run(['sync'], check=True)
+    subprocess.run(['systemctl', 'reboot'], check=True)

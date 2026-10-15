@@ -1,0 +1,47 @@
+--- /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/docking.js.bak	2026-09-11 06:51:47.000000000 -0600
++++ /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/docking.js	2026-10-15 12:03:24.313298581 -0600
+@@ -863,8 +863,7 @@
+     }
+ 
+     _animateIn(time, delay) {
+-        if (this._intellihideIsEnabled)
+-            this._disableUnredirect();
++        this._disableUnredirect();
+         this._dockState = State.SHOWING;
+         this.dash.iconAnimator.start();
+         this._delayedHide = false;
+@@ -902,8 +901,7 @@
+             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+             onComplete: () => {
+                 this._dockState = State.HIDDEN;
+-                if (this._intellihideIsEnabled)
+-                    this._restoreUnredirect();
++                this._restoreUnredirect();
+                 // Remove queued barrier removal timeout if any
+                 if (this._removeBarrierTimeoutId > 0)
+                     GLib.source_remove(this._removeBarrierTimeoutId);
+@@ -945,8 +943,8 @@
+             shouldDwell = (y === this._monitor.y) && (x > workArea.x) &&
+                 (x < workArea.x + workArea.width);
+         } else if (this._position === St.Side.BOTTOM) {
+-            shouldDwell = (y === this._monitor.y + this._monitor.height - 1) &&
+-                (x > workArea.x) && (x < workArea.x + workArea.width);
++            shouldDwell = (y >= this._monitor.y + this._monitor.height - 2) &&
++                (x >= this._monitor.x) && (x <= this._monitor.x + this._monitor.width);
+         }
+ 
+         if (shouldDwell) {
+@@ -994,12 +992,7 @@
+         if (Main.modalCount > (Main.overview.visible ? 1 : 0))
+             return GLib.SOURCE_REMOVE;
+ 
+-        // If the user interacted with the focus window since we started the tray
+-        // dwell (by clicking or typing), don't activate the message tray
+-        const focusWindow = global.display.focus_window;
+-        const currentUserTime = focusWindow ? focusWindow.user_time : 0;
+-        if (currentUserTime !== this._dockDwellUserTime)
+-            return GLib.SOURCE_REMOVE;
++        // Note: Do not abort on focusWindow.user_time so autohide works in fullscreen apps.
+ 
+         // Reuse the pressure version function, the logic is the same
+         this._onPressureSensed();

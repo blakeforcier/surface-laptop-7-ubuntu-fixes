@@ -1,0 +1,16 @@
+#!/usr/bin/python3
+"""Fresh-boot verification of the installed wake stack; refuse blocked workers."""
+from pathlib import Path
+import subprocess,hashlib,sys,os,time
+assert os.geteuid()==0 and sys.argv[1:] in ([],['--check-only'])
+expected={'/boot/sl7-wake-fix.vmlinuz':'2083b94fe79f8a60013d43427f7d82ace2d34b02b11c5ddd2fa6dcc1463f7a5f','/boot/sl7-wake-fix.initrd':'20bbc464a4adacc4feb1893b7afd242bc1442557e530b66a856c32247193a9a9'}
+for file,digest in expected.items():assert hashlib.sha256(Path(file).read_bytes()).hexdigest()==digest,file
+assert 'GRUB_DEFAULT="sl7-wake-fix"' in Path('/etc/default/grub.d/99-surface.cfg').read_text()
+env=subprocess.check_output(['grub-editenv','/boot/grub/grubenv','list'],text=True)
+assert not any(row.startswith('next_entry=') and row!='next_entry=' for row in env.splitlines()),'a one-time boot is queued'
+for i in range(3):
+ subprocess.run(['/usr/local/sbin/surface-wake-check','--initialize'],check=True)
+ if i<2:time.sleep(1)
+print('Installed wake boot verified; no blocked workers in three checks.')
+if sys.argv[1:]!=['--check-only']:
+ subprocess.run(['sync'],check=True);subprocess.run(['systemctl','reboot'],check=True)

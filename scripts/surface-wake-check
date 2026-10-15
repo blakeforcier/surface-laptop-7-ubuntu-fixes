@@ -1,0 +1,82 @@
+#!/usr/bin/python3
+"""Validate the tested Surface wake stack; stop repeated sleep after a failed wake."""
+from pathlib import Path
+import os,sys,json,subprocess,time,hashlib,struct,re
+base=Path('/var/lib/laptop-sleep-fix/wake-persistence')
+boot=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+mode=sys.argv[1:]
+assert os.geteuid()==0 and mode in (['--initialize'],['--boot-initialize'],['--before'],['--after'])
+def require(ok,message):
+ if not ok:raise RuntimeError(message)
+def value(path):return Path(path).read_text().strip()
+def blocked():
+ return [row for row in subprocess.check_output(['ps','-eo','stat,pid,comm,wchan:40'],text=True).splitlines() if row.split() and row.split()[0].startswith('D') and any(x in row for x in ['kworker','kacpi','pciehp'])]
+def settle_resume_workers():
+ # Only observe resumed work; never restart sleep or reset a driver.
+ deadline=time.monotonic()+5.0
+ samples=[];quiet=0;rows=[]
+ while True:
+  rows=blocked()
+  samples.append({'time':time.time(),'workers':rows})
+  quiet=quiet+1 if not rows else 0
+  if quiet>=3:return True,rows,samples
+  remaining=deadline-time.monotonic()
+  if remaining<=0:return False,rows,samples
+  time.sleep(min(0.25,remaining))
+def inputs_ready():
+ dev=Path('/sys/bus/pci/devices/0000:00:10.1')
+ return (dev/'driver').exists() and any(subprocess.run(['systemctl','is-active','--quiet','iptsd@dev-'+p.name+'.service']).returncode==0 for p in dev.glob('*/hidraw/hidraw*'))
+try:
+ require(value('/sys/class/dmi/id/product_name')=='Surface Laptop for Business 7th Edition with Intel','unexpected laptop model')
+ require(value('/sys/class/dmi/id/bios_version')=='18.106.143','firmware changed; revalidate wake compatibility')
+ require(value('/sys/module/acpi/parameters/sl7_bad_io_active')=='Y','tested core IRQ filter is not active')
+ expected={'intel_quickspi':'1388207F8E00F1B4A7147A4','8250_dw':'A5C7FCD60C235E9A3A37924','snd_soc_rt721_sdca':'2AB0F13EAF90F4980F54691','snd_soc_rt1320_sdw':'CD492491F09401F06EC7ACC','soundwire_generic_allocation':'4F7D9D8CBCD4528E1EA1202'}
+ for module,src in expected.items():require(value('/sys/module/'+module+'/srcversion')==src,'unexpected module: '+module)
+ require(value('/sys/module/8250_dw/parameters/surface_sam_no_dma')=='Y','SAM UART DMA workaround is not active')
+ f=Path('/sys/firmware/acpi/tables/FACP').read_bytes()
+ require(struct.unpack_from('<H',f,46)[0]==9 and struct.unpack_from('<I',f,80)[0]==0x1860 and struct.unpack_from('<I',f,84)[0]==0x1810 and list(f[92:95])==[32,24,128],'unexpected SCI/GPE layout')
+ if mode==['--boot-initialize']:
+  # Device initialization can transiently park workers during startup.
+  # Wait for a quiet point before installing a handler; never retry sleep.
+  for i in range(16):
+   if not blocked():break
+   if i<15:time.sleep(1)
+ if mode==['--after']:
+  resume_quiet,resume_workers,resume_samples=settle_resume_workers()
+  (base/'resume-workers.json').write_text(json.dumps({'boot_id':boot,'quiet':resume_quiet,'samples':resume_samples},indent=2)+'\n')
+  require(resume_quiet,'resume workers did not settle within five seconds: '+'; '.join(resume_workers))
+ if mode!=['--after']:
+  for _ in range(8):
+   workers=blocked()
+   if not workers: break
+   time.sleep(0.25)
+  require(not workers,'blocked firmware/kernel workers; stop sleep testing: '+'; '.join(workers))
+ guard=Path('/sys/module/surface_sl7_gpe_guard')
+ if not guard.exists():
+  require(mode in (['--initialize'],['--boot-initialize']),'missing LAB handler; initialize wake guard first')
+  module=Path('/usr/local/lib/laptop-sleep-fix/surface_sl7_gpe_guard.ko')
+  require(hashlib.sha256(module.read_bytes()).hexdigest() in ('186d364c3a63dbb0ad9f5ccfd028463a1cec4d172acf34f5fec024ad893d9e18', '4d8b3384faf85e64eb5d1f710a5daa592c0e27fbb1138413342d23b47ffaa340'),'LAB handler binary changed')
+  subprocess.run(['insmod',str(module),'enable_trial=1','quarantine_bad_io=0'],check=True)
+ require(value(guard/'srcversion')=='6CD3D0F2162EE3F0527CEB9','unexpected LAB handler')
+ for name,want in [('quarantine_bad_io','N'),('quarantine_timeouts','0'),('sci_paused','0')]:require(value(guard/'parameters'/name)==want,'unsafe old SCI quarantine state: '+name)
+ latch=base/'unhealthy.json'
+ if mode==['--before']:
+  if latch.exists():require(json.loads(latch.read_text()).get('boot_id')!=boot,'previous wake failed; review unhealthy.json before another sleep')
+  require(inputs_ready(),'trackpad driver/daemon is not ready')
+  (base/'before.json').write_text(json.dumps({'boot_id':boot,'time':time.time()})+'\n')
+ if mode==['--after']:
+  for i in range(5):
+   if inputs_ready():break
+   time.sleep(1)
+  require(inputs_ready(),'trackpad daemon did not recover after wake')
+  previous=json.loads((base/'before.json').read_text())
+  require(previous['boot_id']==boot,'sleep bookkeeping boot mismatch')
+  journal=subprocess.check_output(['journalctl','-b','-k','--since','@'+str(int(previous['time'])),'--no-pager'],text=True)
+  bad=[line for line in journal.splitlines() if re.search(r'intel_quickspi.*(?:fail|error|timeout)|blocked for more|Kernel panic|BUG:|general protection fault|flip_done timed out|GPU HANG',line,re.I)]
+  require(not bad,'new kernel/input failure after wake: '+'; '.join(bad[:3]))
+ print('Surface wake compatibility check passed: '+mode[0])
+except Exception as e:
+ if mode==['--after']:
+  (base/'unhealthy.json').write_text(json.dumps({'boot_id':boot,'reason':str(e),'time':time.time()},indent=2)+'\n')
+ print('Surface sleep blocked: '+str(e),file=sys.stderr)
+ raise SystemExit(1)

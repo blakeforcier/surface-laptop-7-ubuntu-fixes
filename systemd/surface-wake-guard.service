@@ -1,0 +1,10 @@
+[Unit]
+Description=Validate Surface wake compatibility and initialize LAB handler
+After=systemd-modules-load.service
+Before=sleep.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/surface-wake-check --boot-initialize
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

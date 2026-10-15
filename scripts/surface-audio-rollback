@@ -1,0 +1,22 @@
+#!/usr/bin/python3
+"""Restore original audio modules/initrd for 6.19.8-surface-3. No reboot."""
+from pathlib import Path
+import hashlib,json,os,shutil,subprocess,time
+if os.geteuid()!=0: raise SystemExit('Run with sudo; save work before restarting afterward.')
+backup=Path('/var/lib/laptop-sleep-fix/audio-persistent-backup');r=json.loads((backup/'installation.json').read_text());k=r['kernel']
+assert k=='6.19.8-surface-3'
+original=backup/('initrd.img-'+k)
+assert hashlib.sha256(original.read_bytes()).hexdigest()==r['original_initrd_sha256']
+overrides=Path(r['override_directory']);assert overrides==Path('/lib/modules/'+k+'/updates/sl7-audio')
+assert set(p.name for p in overrides.iterdir())==set(c['name'] for c in r['modules'])
+for c in r['modules']:
+ assert hashlib.sha256((overrides/c['name']).read_bytes()).hexdigest()==c['sha256']
+normal=Path('/boot/initrd.img-'+k);sha=hashlib.sha256(normal.read_bytes()).hexdigest()
+assert sha in {r['original_initrd_sha256'],r.get('installed_initrd_sha256')}, 'Current initrd changed since installation; inspect before rollback'
+archived=backup/('disabled-overrides-'+str(time.time_ns()));overrides.rename(archived)
+try:subprocess.run(['depmod','-a',k],check=True)
+except Exception:
+ archived.rename(overrides);subprocess.run(['depmod','-a',k],check=True);raise
+staged=normal.with_name(normal.name+'.sl7-rollback');shutil.copy2(original,staged);os.replace(staged,normal)
+subprocess.run(['sync'],check=True)
+print('Original module selection and boot image restored. Running drivers unchanged; restart when work is saved.')

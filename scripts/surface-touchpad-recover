@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+[ "$(cat /sys/class/dmi/id/product_name)" = "Surface Laptop for Business 7th Edition with Intel" ] || exit 0
+pci=/sys/bus/pci/devices/0000:00:10.1
+driver=/sys/bus/pci/drivers/intel_quickspi
+[ -d "$pci" ] && [ -d "$driver" ] || exit 0
+[ "$(cat "$pci/vendor")" = 0x8086 ] || exit 0
+[ "$(cat "$pci/device")" = 0xa84b ] || exit 0
+# Temporarily block udev from starting the daemon midway through the reset.
+unit=
+for node in "$pci"/*/hidraw/hidraw*; do
+    [ -e "$node" ] || continue
+    unit="iptsd@dev-${node##*/}.service"
+    break
+done
+[ -n "$unit" ] || exit 0
+restore_daemon() {
+    /usr/bin/systemctl unmask --runtime "$unit"
+    /usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
+    for node in "$pci"/*/hidraw/hidraw*; do
+        [ -e "$node" ] || continue
+        /usr/bin/systemctl --no-block start "iptsd@dev-${node##*/}.service"
+    done
+}
+/usr/bin/systemctl mask --runtime --now "$unit"
+trap restore_daemon EXIT
+if [ -L "$pci/driver" ]; then
+    printf '%s\n' 0000:00:10.1 > "$driver/unbind"
+fi
+if [ -w "$pci/reset" ]; then
+    printf '%s\n' 1 > "$pci/reset"
+fi
+printf '%s\n' 0000:00:10.1 > "$driver/bind"
+/usr/bin/udevadm settle --timeout=10
